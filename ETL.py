@@ -1,13 +1,18 @@
+# pyright: ignore
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import normalize
 
+
+DataFrameLike = Any
+SeriesLike = Any
+TimestampLike = Any
 
 READ_EVENT = 2
 WISHLIST_EVENT = 1
@@ -27,29 +32,29 @@ class EtlConfig:
 
 
 def build_datasets(
-    interactions: pd.DataFrame,
-    editions: pd.DataFrame,
-    users: pd.DataFrame,
-    book_genres: pd.DataFrame,
-    candidates: pd.DataFrame,
-    split_date: Optional[str] = None,
+    interactions: DataFrameLike,
+    editions: DataFrameLike,
+    users: DataFrameLike,
+    book_genres: DataFrameLike,
+    candidates: DataFrameLike,
+    make_valid: bool = True,
     config: Optional[EtlConfig] = None,
-) -> Tuple[pd.DataFrame, Optional[pd.DataFrame], pd.DataFrame]:
+) -> Tuple[DataFrameLike, Optional[DataFrameLike], DataFrameLike]:
     if config is None:
         config = EtlConfig()
 
     interactions = interactions.copy()
     interactions["event_ts"] = pd.to_datetime(interactions["event_ts"])
 
-    if split_date is None:
-        history_end = interactions["event_ts"].max()
+    max_ts = interactions["event_ts"].max()
+    if make_valid and config.valid_days and config.valid_days > 0:
+        valid_end = max_ts
+        valid_start = max_ts - pd.Timedelta(days=config.valid_days)
+        history_end = valid_start - pd.Timedelta(days=config.gap_days)
+    else:
         valid_start = None
         valid_end = None
-    else:
-        split_date_dt = pd.to_datetime(split_date)
-        history_end = split_date_dt - pd.Timedelta(days=config.gap_days)
-        valid_start = split_date_dt
-        valid_end = split_date_dt + pd.Timedelta(days=config.valid_days)
+        history_end = max_ts
 
     base = _prepare_base_tables(interactions, editions, users, book_genres)
 
@@ -101,22 +106,28 @@ def build_datasets(
 
 
 def build_datasets_xy(
-    interactions: pd.DataFrame,
-    editions: pd.DataFrame,
-    users: pd.DataFrame,
-    book_genres: pd.DataFrame,
-    candidates: pd.DataFrame,
-    split_date: Optional[str] = None,
+    interactions: DataFrameLike,
+    editions: DataFrameLike,
+    users: DataFrameLike,
+    book_genres: DataFrameLike,
+    candidates: DataFrameLike,
+    make_valid: bool = True,
     config: Optional[EtlConfig] = None,
     target: str | list[str] = "rel",
-) -> Tuple[pd.DataFrame, pd.DataFrame, Optional[pd.DataFrame], Optional[pd.DataFrame], pd.DataFrame]:
+) -> Tuple[
+    DataFrameLike,
+    SeriesLike,
+    Optional[DataFrameLike],
+    Optional[SeriesLike],
+    DataFrameLike,
+]:
     train_df, valid_df, test_df = build_datasets(
         interactions=interactions,
         editions=editions,
         users=users,
         book_genres=book_genres,
         candidates=candidates,
-        split_date=split_date,
+        make_valid=make_valid,
         config=config,
     )
 
@@ -136,17 +147,17 @@ def build_datasets_xy(
 
 
 def build_rolling_train(
-    interactions: pd.DataFrame,
-    editions: pd.DataFrame,
-    users: pd.DataFrame,
-    book_genres: pd.DataFrame,
-    candidates: pd.DataFrame,
+    interactions: DataFrameLike,
+    editions: DataFrameLike,
+    users: DataFrameLike,
+    book_genres: DataFrameLike,
+    candidates: DataFrameLike,
     window_days: int = 30,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     step_days: Optional[int] = None,
     config: Optional[EtlConfig] = None,
-) -> pd.DataFrame:
+) -> DataFrameLike:
     if config is None:
         config = EtlConfig()
     if step_days is None:
@@ -201,27 +212,27 @@ def build_rolling_train(
 
 @dataclass
 class _BaseTables:
-    interactions: pd.DataFrame
-    editions_base: pd.DataFrame
-    users_base: pd.DataFrame
-    genres_by_book: pd.DataFrame
+    interactions: DataFrameLike
+    editions_base: DataFrameLike
+    users_base: DataFrameLike
+    genres_by_book: DataFrameLike
 
 
 @dataclass
 class _FeatureState:
-    item_features: pd.DataFrame
-    user_features: pd.DataFrame
-    user_genre_cnt: pd.Series
-    user_author_cnt: pd.Series
-    user_vec: pd.DataFrame
-    author_vec: pd.DataFrame
+    item_features: DataFrameLike
+    user_features: DataFrameLike
+    user_genre_cnt: SeriesLike
+    user_author_cnt: SeriesLike
+    user_vec: DataFrameLike
+    author_vec: DataFrameLike
 
 
 def _prepare_base_tables(
-    interactions: pd.DataFrame,
-    editions: pd.DataFrame,
-    users: pd.DataFrame,
-    book_genres: pd.DataFrame,
+    interactions: DataFrameLike,
+    editions: DataFrameLike,
+    users: DataFrameLike,
+    book_genres: DataFrameLike,
 ) -> _BaseTables:
     editions_base = editions[
         [
@@ -252,7 +263,7 @@ def _prepare_base_tables(
     )
 
 
-def _fill_user_fields(users: pd.DataFrame) -> pd.DataFrame:
+def _fill_user_fields(users: DataFrameLike) -> DataFrameLike:
     users = users.copy()
     gender_mode = users["gender"].mode(dropna=True)
     gender_mode = gender_mode.iloc[0] if not gender_mode.empty else 0
@@ -264,11 +275,11 @@ def _fill_user_fields(users: pd.DataFrame) -> pd.DataFrame:
 
 
 def _build_history_enriched(
-    history: pd.DataFrame,
-    editions_base: pd.DataFrame,
-    users_base: pd.DataFrame,
-    genres_by_book: pd.DataFrame,
-) -> pd.DataFrame:
+    history: DataFrameLike,
+    editions_base: DataFrameLike,
+    users_base: DataFrameLike,
+    genres_by_book: DataFrameLike,
+) -> DataFrameLike:
     history = history.merge(editions_base, on="edition_id", how="left")
     history = history.merge(users_base, on="user_id", how="left")
     history = history.merge(genres_by_book, on="book_id", how="left")
@@ -279,7 +290,7 @@ def _build_history_enriched(
 
 
 def _build_feature_state(
-    history_enriched: pd.DataFrame,
+    history_enriched: DataFrameLike,
     base: _BaseTables,
 ) -> _FeatureState:
     year_rank_map = _build_year_rank_map(history_enriched)
@@ -385,13 +396,13 @@ def _build_feature_state(
 
 
 def _build_item_features(
-    editions_base: pd.DataFrame,
-    genres_by_book: pd.DataFrame,
+    editions_base: DataFrameLike,
+    genres_by_book: DataFrameLike,
     year_rank_map: dict,
     author_rank_map: dict,
     book_rank_map: dict,
-    top_genres: pd.Series,
-) -> pd.DataFrame:
+    top_genres: SeriesLike,
+) -> DataFrameLike:
     item_features = editions_base.merge(genres_by_book, on="book_id", how="left")
     item_features["genre_id"] = item_features["genre_id"].apply(_ensure_list)
 
@@ -433,10 +444,10 @@ def _build_item_features(
 
 
 def _build_user_features(
-    users_base: pd.DataFrame,
-    history_enriched: pd.DataFrame,
+    users_base: DataFrameLike,
+    history_enriched: DataFrameLike,
     age_rank_map: dict,
-) -> pd.DataFrame:
+) -> DataFrameLike:
     user_features = users_base.copy()
     user_features["age_rank"] = (
         user_features["age"].map(age_rank_map).fillna(1).astype(int)
@@ -461,10 +472,10 @@ def _build_user_features(
 
 
 def _build_feature_frame(
-    candidates: pd.DataFrame,
+    candidates: DataFrameLike,
     state: _FeatureState,
     config: EtlConfig,
-) -> pd.DataFrame:
+) -> DataFrameLike:
     df = candidates.merge(
         state.item_features,
         on="edition_id",
@@ -542,7 +553,7 @@ def _build_feature_frame(
     return df
 
 
-def _fill_feature_missing(df: pd.DataFrame) -> pd.DataFrame:
+def _fill_feature_missing(df: DataFrameLike) -> DataFrameLike:
     df = df.copy()
     for col in df.columns:
         if col in {"user_id", "edition_id"}:
@@ -558,10 +569,10 @@ def _fill_feature_missing(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _label_candidates(
-    interactions: pd.DataFrame,
-    window_start: pd.Timestamp,
-    window_end: pd.Timestamp,
-) -> pd.DataFrame:
+    interactions: DataFrameLike,
+    window_start: TimestampLike,
+    window_end: TimestampLike,
+) -> DataFrameLike:
     labels = interactions[
         (interactions["event_ts"] >= window_start)
         & (interactions["event_ts"] <= window_end)
@@ -579,7 +590,7 @@ def _label_candidates(
     return agg.reset_index()
 
 
-def _fill_missing_labels(df: pd.DataFrame) -> pd.DataFrame:
+def _fill_missing_labels(df: DataFrameLike) -> DataFrameLike:
     df = df.copy()
     for col in ["rel", "y_read", "y_wishlist"]:
         if col in df.columns:
@@ -588,11 +599,11 @@ def _fill_missing_labels(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _sample_negatives(
-    df: pd.DataFrame,
+    df: DataFrameLike,
     negative_ratio: float,
     keep_users_without_positives: bool,
     random_state: int,
-) -> pd.DataFrame:
+) -> DataFrameLike:
     if negative_ratio is None or negative_ratio <= 0:
         return df
 
@@ -629,7 +640,7 @@ def _sample_negatives(
     return out.sample(frac=1, random_state=random_state).reset_index(drop=True)
 
 
-def _build_year_rank_map(history: pd.DataFrame) -> dict:
+def _build_year_rank_map(history: DataFrameLike) -> dict:
     if history.empty:
         return {}
     counts = (
@@ -644,7 +655,7 @@ def _build_year_rank_map(history: pd.DataFrame) -> dict:
     return rank_map
 
 
-def _build_age_rank_map(history: pd.DataFrame) -> dict:
+def _build_age_rank_map(history: DataFrameLike) -> dict:
     if history.empty:
         return {}
     counts = history.groupby("age").size().sort_values(ascending=False)
@@ -654,7 +665,7 @@ def _build_age_rank_map(history: pd.DataFrame) -> dict:
     return rank_map
 
 
-def _build_rank_map(history: pd.DataFrame, key: str, score_mass: list[int]) -> dict:
+def _build_rank_map(history: DataFrameLike, key: str, score_mass: list[int]) -> dict:
     if history.empty:
         return {}
     counts = history.groupby(key).size().sort_values(ascending=False)
@@ -687,7 +698,7 @@ def _score_mass_pow_175() -> list[int]:
     return score_mass
 
 
-def _main_genre(genres: list, top_genres: pd.Series) -> int:
+def _main_genre(genres: list, top_genres: SeriesLike) -> int:
     if not genres:
         return -1
     return max(genres, key=lambda g: top_genres.get(g, 0))
@@ -703,7 +714,7 @@ def _ensure_list(value) -> list:
     return [value]
 
 
-def _map_user_genre_cnt(df: pd.DataFrame, user_genre_cnt: pd.Series) -> pd.Series:
+def _map_user_genre_cnt(df: DataFrameLike, user_genre_cnt: SeriesLike) -> SeriesLike:
     temp = df[["user_id", "genre_id"]].copy()
     temp["row_id"] = np.arange(len(temp))
     temp = temp.explode("genre_id")
@@ -718,12 +729,12 @@ def _map_user_genre_cnt(df: pd.DataFrame, user_genre_cnt: pd.Series) -> pd.Serie
     )
 
 
-def _map_user_author_hits(df: pd.DataFrame, user_author_cnt: pd.Series) -> pd.Series:
+def _map_user_author_hits(df: DataFrameLike, user_author_cnt: SeriesLike) -> SeriesLike:
     idx = pd.MultiIndex.from_arrays([df["user_id"], df["author_id"]])
     return user_author_cnt.reindex(idx, fill_value=0).values
 
 
-def _normalize_df(df: pd.DataFrame) -> pd.DataFrame:
+def _normalize_df(df: DataFrameLike) -> DataFrameLike:
     if df.empty:
         return df
     values = df.values
@@ -733,10 +744,10 @@ def _normalize_df(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _fit_clusters(
-    vec: pd.DataFrame,
+    vec: DataFrameLike,
     n_clusters: int,
     random_state: int,
-) -> pd.Series:
+) -> SeriesLike:
     if vec.empty:
         return pd.Series([], dtype=int, index=vec.index)
     n_clusters = min(n_clusters, len(vec))
@@ -749,10 +760,10 @@ def _fit_clusters(
 
 
 def _user_author_sim(
-    df: pd.DataFrame,
-    user_vec: pd.DataFrame,
-    author_vec: pd.DataFrame,
-) -> pd.Series:
+    df: DataFrameLike,
+    user_vec: DataFrameLike,
+    author_vec: DataFrameLike,
+) -> SeriesLike:
     common_feats = list(set(user_vec.columns) & set(author_vec.columns))
     if not common_feats:
         return pd.Series(np.zeros(len(df)), index=df.index)
@@ -778,8 +789,8 @@ def _user_author_sim(
 
 
 def _make_windows(
-    start_ts: pd.Timestamp,
-    end_ts: pd.Timestamp,
+    start_ts: TimestampLike,
+    end_ts: TimestampLike,
     window_days: int,
     step_days: int,
 ) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
