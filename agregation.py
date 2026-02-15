@@ -1,13 +1,9 @@
 import numpy as np
 import pandas as pd
 from pandas import DataFrame
-from typing import Tuple
-import matplotlib.pyplot as plt
-import seaborn as sns
 from sklearn.preprocessing import normalize
 from sklearn.cluster import KMeans
 from sklearn.metrics.pairwise import cosine_similarity
-from sklearn.model_selection import train_test_split
 
 def prosessing_NaN(df: DataFrame) -> DataFrame:
     df["rating"] = df["rating"].fillna(round(df["rating"].mean())).astype("int64")
@@ -84,7 +80,6 @@ def aggr_by_books(df: DataFrame, start_val: int = 10) -> DataFrame:
     for i in range(3, 12):
         score_mass.append(score)
         score = round(score * 1.75)
-    print(score_mass)
 
     number_month = len(df["event_ts"].dt.month.unique().tolist())
     div = np.sqrt(6 / number_month)
@@ -153,33 +148,37 @@ def total_rank(df: DataFrame) -> DataFrame:
 
 def add_clusters_and_dis(df: DataFrame, kol_user_clusters: int = 75, kol_author_clusters: int = 45) -> DataFrame:
     user_vec = df.groupby("user_id").agg(
-        genre_pop_mean=("genre_popularity_mean", "mean"),
-        language_multi_flag=("user_multi_lang_flag", "mean"),
-        rating_mean=("rating", "mean"),
-        author_rank_mean=("author_rank", "mean"),
-        book_rank_mean=("book_rank", "mean"),
-        year_rank_mean=("year_rank", "mean"),
-        total_rank_mean=("total_rank", "mean"),
-        n_genres_mean=("n_genres", "mean"),
+        genre_pop_mean= ("genre_popularity_mean", "mean"),
+        language_multi_flag= ("user_multi_lang_flag", "mean"),
+        rating_mean= ("rating", "mean"),
+        author_rank_mean= ("author_rank", "mean"),
+        book_rank_mean= ("book_rank", "mean"),
+        year_rank_mean= ("year_rank", "mean"),
+        total_rank_mean= ("total_rank", "mean"),
+        n_genres_mean=("n_genres", "mean")
     )
-    user_vec = pd.DataFrame(
-        normalize(user_vec),
-        index=user_vec.index,
-        columns=user_vec.columns,
-    )
+    user_ind = user_vec.index
+    user_vec = normalize(user_vec.values)
 
-    author_vec = df.groupby("author_id").agg(
-        genre_pop_mean=("genre_popularity_mean", "mean"),
-        year_rank_mean=("year_rank", "mean"),
-        book_rank_mean=("book_rank", "mean"),
-        n_genres_mean=("n_genres", "mean"),
-        rating_mean=("rating", "mean"),
+    user_vec = pd.DataFrame(user_vec, index=user_ind)
+
+
+    author_vec = (
+        df
+        .groupby("author_id")
+        .agg(
+            genre_pop_mean=("genre_popularity_mean", "mean"),
+            year_rank_mean=("year_rank", "mean"),
+            book_rank_mean=("book_rank", "mean"),
+            n_genres_mean=("n_genres", "mean"),
+            rating_mean=("rating", "mean"),
+        )
     )
-    author_vec = pd.DataFrame(
-        normalize(author_vec),
-        index=author_vec.index,
-        columns=author_vec.columns,
-    )
+    author_ind = author_vec.index
+    author_vec= normalize(author_vec.values)
+
+    author_vec = pd.DataFrame(author_vec, index=author_ind)
+
 
     user_clusters = KMeans(n_clusters=kol_user_clusters, random_state=42).fit_predict(user_vec)
     author_clusters = KMeans(n_clusters=kol_author_clusters, random_state=42).fit_predict(author_vec)
@@ -190,7 +189,11 @@ def add_clusters_and_dis(df: DataFrame, kol_user_clusters: int = 75, kol_author_
     df = df.merge(user_vec["user_cluster"], on="user_id", how="left")
     df = df.merge(author_vec["author_cluster"], on="author_id", how="left")
 
-    COMMON_FEATS = list(set(user_vec.columns) & set(author_vec.columns))
+    COMMON_FEATS = list(
+        set(user_vec.columns)
+        & set(author_vec.columns)
+    )
+    COMMON_FEATS
 
     u = user_vec.reset_index()[["user_id", *COMMON_FEATS]].rename(
         columns={c: f"{c}_u" for c in COMMON_FEATS}
@@ -206,9 +209,8 @@ def add_clusters_and_dis(df: DataFrame, kol_user_clusters: int = 75, kol_author_
     a_mat = df_[[f"{c}_a" for c in COMMON_FEATS]].to_numpy()
 
     num = (u_mat * a_mat).sum(axis=1)
-    den = np.linalg.norm(u_mat, axis=1) * np.linalg.norm(a_mat, axis=1)
-    den = np.where(den == 0, np.nan, den)
-
+    den = (np.linalg.norm(u_mat, axis=1) * np.linalg.norm(a_mat, axis=1))
     df["user_author_sim"] = num / den
+
     return df
 
