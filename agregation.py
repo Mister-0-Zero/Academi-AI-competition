@@ -6,7 +6,6 @@ from sklearn.cluster import KMeans
 from sklearn.metrics.pairwise import cosine_similarity
 
 def prosessing_NaN(df: DataFrame) -> DataFrame:
-    df["rating"] = df["rating"].fillna(round(df["rating"].mean())).astype("int64")
     df["description"] = df["description"].fillna("")
     df["gender"] = df["gender"].fillna(df["gender"].mode()[0]).astype("int64")
     df["age"] = df["age"].fillna(round(df["age"].mean())).astype("int64")
@@ -143,14 +142,13 @@ def log1p_feature(df: DataFrame) -> DataFrame:
     return df
 
 def total_rank(df: DataFrame) -> DataFrame:
-    df["total_rank"] = df[["author_rank", "rating", "book_rank", "year_rank"]].agg(sum, axis=1)
+    df["total_rank"] = df[["author_rank", "book_rank", "year_rank"]].agg(sum, axis=1)
     return df
 
 def add_clusters_and_dis(df: DataFrame, kol_user_clusters: int = 75, kol_author_clusters: int = 45) -> DataFrame:
     user_vec = df.groupby("user_id").agg(
         genre_pop_mean= ("genre_popularity_mean", "mean"),
         language_multi_flag= ("user_multi_lang_flag", "mean"),
-        rating_mean= ("rating", "mean"),
         author_rank_mean= ("author_rank", "mean"),
         book_rank_mean= ("book_rank", "mean"),
         year_rank_mean= ("year_rank", "mean"),
@@ -171,7 +169,6 @@ def add_clusters_and_dis(df: DataFrame, kol_user_clusters: int = 75, kol_author_
             year_rank_mean=("year_rank", "mean"),
             book_rank_mean=("book_rank", "mean"),
             n_genres_mean=("n_genres", "mean"),
-            rating_mean=("rating", "mean"),
         )
     )
     author_ind = author_vec.index

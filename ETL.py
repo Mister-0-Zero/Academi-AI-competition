@@ -39,7 +39,7 @@ def Transform(df: DataFrame, kol_in_group_publ_year: int, kol_in_group_users_yea
     df = prosessing_NaN(df)
 
     #Удаляем лишние столбцы
-    df.drop(columns=["description", "title", "age_restriction"], inplace=True)
+    df.drop(columns=["description", "title", "age_restriction", "event_type", "rating"], inplace=True)
 
     #Агрегация по годам публикации
     df = aggr_by_publ_year(df, kol_in_group_publ_year)
@@ -75,7 +75,7 @@ def Transform(df: DataFrame, kol_in_group_publ_year: int, kol_in_group_users_yea
     df = add_clusters_and_dis(df, kol_user_clusters, kol_author_clusters)
 
     #Последние удаление лишних фич
-    df.drop(columns=["publisher_id", "author_id", "book_id"], inplace=True)
+    df.drop(columns=["publisher_id", "author_id", "book_id", "event_ts"], inplace=True)
 
     return df
 
