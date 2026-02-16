@@ -12,8 +12,9 @@ def prosessing_NaN(df: DataFrame) -> DataFrame:
 
     return df
 
-def aggr_by_publ_year(df: DataFrame, kol_in_group: int = 2) -> DataFrame:
-    read_in_publ = df.groupby("publication_year").size().reset_index(name="counts").sort_values(by="counts", ascending=False)
+def aggr_by_publ_year(df: DataFrame, kol_in_group: int = 2, stats_df: DataFrame | None = None) -> DataFrame:
+    base_df = stats_df if stats_df is not None else df
+    read_in_publ = base_df.groupby("publication_year").size().reset_index(name="counts").sort_values(by="counts", ascending=False)
     read_in_publ = read_in_publ.reset_index(drop=True)
 
     rank_map = {}
@@ -27,8 +28,9 @@ def aggr_by_publ_year(df: DataFrame, kol_in_group: int = 2) -> DataFrame:
 
     return df
 
-def aggr_by_number_years_users(df: DataFrame, kol_in_group: int = 5) -> DataFrame:
-    age_rank_ = df.groupby("age").size().reset_index(name="counts").sort_values(by="counts", ascending=False).reset_index(drop=True)
+def aggr_by_number_years_users(df: DataFrame, kol_in_group: int = 5, stats_df: DataFrame | None = None) -> DataFrame:
+    base_df = stats_df if stats_df is not None else df
+    age_rank_ = base_df.groupby("age").size().reset_index(name="counts").sort_values(by="counts", ascending=False).reset_index(drop=True)
 
     age_rank_map = {}
     for i, y in enumerate(age_rank_["age"]):
@@ -38,19 +40,20 @@ def aggr_by_number_years_users(df: DataFrame, kol_in_group: int = 5) -> DataFram
 
     return df
 
-def aggr_by_authors(df: DataFrame, start_val: int = 10) -> DataFrame:
+def aggr_by_authors(df: DataFrame, start_val: int = 10, stats_df: DataFrame | None = None) -> DataFrame:
     score_mass = []
     score = start_val
     for i in range(3, 12):
         score_mass.append(score)
         score *= 2
 
-    number_month = len(df["event_ts"].dt.month.unique().tolist())
+    base_df = stats_df if stats_df is not None else df
+    number_month = len(base_df["event_ts"].dt.month.unique().tolist())
     div = np.sqrt(6 / number_month)
     score_mass = [score / div for score in score_mass]
 
 
-    authors_rank_ = df.groupby("author_id").size().reset_index(name="counts").sort_values(by="counts", ascending=False).reset_index(drop=True)
+    authors_rank_ = base_df.groupby("author_id").size().reset_index(name="counts").sort_values(by="counts", ascending=False).reset_index(drop=True)
 
     authors_rank_map = {}
     for i, y in enumerate(authors_rank_["author_id"]):
@@ -65,26 +68,27 @@ def aggr_by_authors(df: DataFrame, start_val: int = 10) -> DataFrame:
 
     return df
 
-def aggr_by_lang(df: DataFrame) -> DataFrame:
+def aggr_by_lang(df: DataFrame, stats_df: DataFrame | None = None) -> DataFrame:
     df["language_flag"] = df["language_id"].apply(lambda x: 1 if x == 119 else 0)
-
-    user_multi_lang_flag = df.groupby("user_id")["language_id"].apply(set).apply(len).apply(lambda x: 1 if x > 1 else 0)
+    base_df = stats_df if stats_df is not None else df
+    user_multi_lang_flag = base_df.groupby("user_id")["language_id"].apply(set).apply(len).apply(lambda x: 1 if x > 1 else 0)
     df["user_multi_lang_flag"] = df["user_id"].map(user_multi_lang_flag)
 
     return df
 
-def aggr_by_books(df: DataFrame, start_val: int = 10) -> DataFrame:
+def aggr_by_books(df: DataFrame, start_val: int = 10, stats_df: DataFrame | None = None) -> DataFrame:
     score_mass = []
     score = start_val
     for i in range(3, 12):
         score_mass.append(score)
         score = round(score * 1.75)
 
-    number_month = len(df["event_ts"].dt.month.unique().tolist())
+    base_df = stats_df if stats_df is not None else df
+    number_month = len(base_df["event_ts"].dt.month.unique().tolist())
     div = np.sqrt(6 / number_month)
     score_mass = [score / div for score in score_mass]
 
-    book_rank_ = df.groupby("book_id").size().reset_index(name="counts").sort_values(by="counts", ascending=False).reset_index(drop=True)
+    book_rank_ = base_df.groupby("book_id").size().reset_index(name="counts").sort_values(by="counts", ascending=False).reset_index(drop=True)
 
     book_rank_map = {}
     for i, y in enumerate(book_rank_["book_id"]):
@@ -100,10 +104,11 @@ def aggr_by_books(df: DataFrame, start_val: int = 10) -> DataFrame:
     return df
 
 
-def aggr_by_genre(df: DataFrame) -> DataFrame:
+def aggr_by_genre(df: DataFrame, stats_df: DataFrame | None = None) -> DataFrame:
+    base_df = stats_df if stats_df is not None else df
     df["n_genres"] = df["genre_id"].apply(len)
 
-    top_genres = df["genre_id"].explode().value_counts()
+    top_genres = base_df["genre_id"].explode().value_counts()
 
     df["main_genre"] = df["genre_id"].apply(
         lambda xs: max(xs, key=lambda g: top_genres.get(g, 0))
@@ -120,14 +125,16 @@ def aggr_by_genre(df: DataFrame) -> DataFrame:
 
     return df
 
-def aggr_user_genre(df: DataFrame) -> DataFrame:
-    user_genre_cnt = df.explode("genre_id").groupby(["user_id", "genre_id"]).size()
+def aggr_user_genre(df: DataFrame, stats_df: DataFrame | None = None) -> DataFrame:
+    base_df = stats_df if stats_df is not None else df
+    user_genre_cnt = base_df.explode("genre_id").groupby(["user_id", "genre_id"]).size()
     df["user_genre_cnt"] = df.apply(lambda x: sum(user_genre_cnt.get((x.user_id, g) , 0 ) for g in x.genre_id), axis=1)
 
     return df
 
-def aggr_user_author_cnt(df: DataFrame) -> DataFrame:
-    user_author_cnt = df.groupby(["user_id", "author_id"]).size()
+def aggr_user_author_cnt(df: DataFrame, stats_df: DataFrame | None = None) -> DataFrame:
+    base_df = stats_df if stats_df is not None else df
+    user_author_cnt = base_df.groupby(["user_id", "author_id"]).size()
     df["user_author_hits"] = df.apply(
         lambda r: user_author_cnt.get((r.user_id, r.author_id), 0),
         axis=1
@@ -145,8 +152,25 @@ def total_rank(df: DataFrame) -> DataFrame:
     df["total_rank"] = df[["author_rank", "book_rank", "year_rank"]].agg(sum, axis=1)
     return df
 
-def add_clusters_and_dis(df: DataFrame, kol_user_clusters: int = 75, kol_author_clusters: int = 45) -> DataFrame:
-    user_vec = df.groupby("user_id").agg(
+def add_clusters_and_dis(
+    df: DataFrame,
+    kol_user_clusters: int = 75,
+    kol_author_clusters: int = 45,
+    stats_df: DataFrame | None = None,
+) -> DataFrame:
+    base_df = stats_df if stats_df is not None else df
+    required_cols = {
+        "genre_popularity_mean",
+        "user_multi_lang_flag",
+        "author_rank",
+        "book_rank",
+        "year_rank",
+        "total_rank",
+        "n_genres",
+    }
+    if not required_cols.issubset(base_df.columns):
+        base_df = df
+    user_vec = base_df.groupby("user_id").agg(
         genre_pop_mean= ("genre_popularity_mean", "mean"),
         language_multi_flag= ("user_multi_lang_flag", "mean"),
         author_rank_mean= ("author_rank", "mean"),
@@ -162,7 +186,7 @@ def add_clusters_and_dis(df: DataFrame, kol_user_clusters: int = 75, kol_author_
 
 
     author_vec = (
-        df
+        base_df
         .groupby("author_id")
         .agg(
             genre_pop_mean=("genre_popularity_mean", "mean"),
@@ -207,7 +231,8 @@ def add_clusters_and_dis(df: DataFrame, kol_user_clusters: int = 75, kol_author_
 
     num = (u_mat * a_mat).sum(axis=1)
     den = (np.linalg.norm(u_mat, axis=1) * np.linalg.norm(a_mat, axis=1))
-    df["user_author_sim"] = num / den
+    with np.errstate(divide="ignore", invalid="ignore"):
+        df["user_author_sim"] = num / den
 
     return df
 
