@@ -111,7 +111,10 @@ def _impute_user_author_sim(df: DataFrame, rng: np.random.Generator, noise_scale
     missing_count = int(mask.sum())
     if missing_count == 0:
         return
-    median_sim = df.loc[df["label"] > 0, "user_author_sim"].median()
+    if "label" in df.columns:
+        median_sim = df.loc[df["label"] > 0, "user_author_sim"].median()
+    else:
+        median_sim = df["user_author_sim"].median()
     if pd.isna(median_sim):
         median_sim = df["user_author_sim"].median()
     if pd.isna(median_sim):
@@ -119,10 +122,11 @@ def _impute_user_author_sim(df: DataFrame, rng: np.random.Generator, noise_scale
     noise = rng.normal(0.0, noise_scale, size=missing_count)
     df.loc[mask, "user_author_sim"] = np.clip(median_sim + noise, 0.0, 1.0)
 
-def _cast_categoricals(df: DataFrame, columns: list[str]) -> None:
-    for col in columns:
-        if col in df.columns:
-            df[col] = df[col].fillna("unknown").astype("string")
+def _fill_clusters(df: DataFrame) -> None:
+    if "author_cluster" in df.columns:
+        df["author_cluster"] = df["author_cluster"].fillna(-1).astype("int64")
+    if "user_cluster" in df.columns:
+        df["user_cluster"] = df["user_cluster"].fillna(-1).astype("int64")
 
 def Extract(
     path_dir_data: str,
@@ -176,46 +180,50 @@ def Transform(df: DataFrame, kol_in_group_publ_year: int, kol_in_group_users_yea
               kol_user_clusters: int, kol_author_clusters: int,
               random_state: int | None = None,
               rank_lambda: float = 0.5,
-              sim_noise_scale: float = 0.01) -> DataFrame:
+              sim_noise_scale: float = 0.01,
+              stats_df: DataFrame | None = None) -> DataFrame:
     #Обработка NaN
     df = prosessing_NaN(df)
     rng = np.random.default_rng(random_state)
 
-    stats_df = None
-    if "label" in df.columns:
-        stats_df = df[df["label"] > 0].copy()
-        if stats_df.empty:
-            stats_df = None
+    stats_df_base = stats_df
+    if stats_df_base is None and "label" in df.columns:
+        stats_df_base = df[df["label"] > 0].copy()
+        if stats_df_base.empty:
+            stats_df_base = None
+    if stats_df_base is not None:
+        stats_df_base = prosessing_NaN(stats_df_base)
 
     #Удаляем лишние столбцы
     df.drop(columns=["description", "title", "age_restriction", "event_type"], inplace=True)
 
     #Агрегация по годам публикации
-    df = aggr_by_publ_year(df, kol_in_group_publ_year, stats_df=stats_df)
+    df = aggr_by_publ_year(df, kol_in_group_publ_year, stats_df=stats_df_base)
 
     #Агрегация по количеству лет пользователей(угруппы пользователей по 5 лет)
-    df = aggr_by_number_years_users(df, kol_in_group_users_year, stats_df=stats_df)
+    df = aggr_by_number_years_users(df, kol_in_group_users_year, stats_df=stats_df_base)
 
     #Агрегация по авторам
-    df = aggr_by_authors(df, start_val_authors, stats_df=stats_df)
+    df = aggr_by_authors(df, start_val_authors, stats_df=stats_df_base)
 
     #Агрегации по языкам(основной ли в книге язык и на рзных ли языках книги пользователь читал)
-    df = aggr_by_lang(df, stats_df=stats_df)
+    df = aggr_by_lang(df, stats_df=stats_df_base)
 
     #Агрегации по книгам(даю ранги книгам в зависимости от частоты их использования)
-    df = aggr_by_books(df, start_val_books, stats_df=stats_df)
+    df = aggr_by_books(df, start_val_books, stats_df=stats_df_base)
 
     _fill_rank_exponential(df, "author_rank", rng, rank_lambda)
     _fill_rank_exponential(df, "book_rank", rng, rank_lambda)
+    _fill_rank_exponential(df, "year_rank", rng, rank_lambda)
 
     #Агрегации по жанрам
-    df = aggr_by_genre(df, stats_df=stats_df)
+    df = aggr_by_genre(df, stats_df=stats_df_base)
 
     #Агрегация польователь\жанры(сколько различных жанров прочитал пользователь)
-    df = aggr_user_genre(df, stats_df=stats_df)
+    df = aggr_user_genre(df, stats_df=stats_df_base)
 
     #Агрегация сколько раз пользователь взаимодействовал с данным автором
-    df = aggr_user_author_cnt(df, stats_df=stats_df)
+    df = aggr_user_author_cnt(df, stats_df=stats_df_base)
 
     #Логарифмирования больших величин
     df = log1p_feature(df)
@@ -225,25 +233,35 @@ def Transform(df: DataFrame, kol_in_group_publ_year: int, kol_in_group_users_yea
 
     #Добавление векторного представление пользователя и автора + их близость
     stats_df_features = None
-    if "label" in df.columns:
-        stats_df_features = df[df["label"] > 0].copy()
-        if stats_df_features.empty:
-            stats_df_features = None
+    if stats_df_base is not None:
+        stats_df_features = stats_df_base.copy()
+        stats_df_features = aggr_by_publ_year(stats_df_features, kol_in_group_publ_year, stats_df=stats_df_base)
+        stats_df_features = aggr_by_number_years_users(stats_df_features, kol_in_group_users_year, stats_df=stats_df_base)
+        stats_df_features = aggr_by_authors(stats_df_features, start_val_authors, stats_df=stats_df_base)
+        stats_df_features = aggr_by_lang(stats_df_features, stats_df=stats_df_base)
+        stats_df_features = aggr_by_books(stats_df_features, start_val_books, stats_df=stats_df_base)
+        stats_df_features = aggr_by_genre(stats_df_features, stats_df=stats_df_base)
+        stats_df_features = aggr_user_genre(stats_df_features, stats_df=stats_df_base)
+        stats_df_features = aggr_user_author_cnt(stats_df_features, stats_df=stats_df_base)
+        stats_df_features = log1p_feature(stats_df_features)
+        stats_df_features = total_rank(stats_df_features)
+
     df = add_clusters_and_dis(df, kol_user_clusters, kol_author_clusters, stats_df=stats_df_features)
 
     _impute_user_author_sim(df, rng, sim_noise_scale)
-    _cast_categoricals(df, ["main_genre", "user_cluster", "author_cluster"])
+    _fill_clusters(df)
 
     #Последние удаление лишних фич
-    df.drop(columns=["publisher_id", "author_id", "book_id", "event_ts", "rating", "genre_id"], inplace=True)
+    df.drop(columns=["publisher_id", "author_id", "book_id", "event_ts",\
+                     "rating", "genre_id"], inplace=True)
 
     return df
 
 def Load(df: DataFrame, path_save: str, expansion: str) -> None:
     if expansion == "csv":
-        df.to_csv(path_save)
+        df.to_csv(path_save, index=False)
     elif expansion == "xlsx":
-        df.to_excel(path_save)
+        df.to_excel(path_save, index=False)
     else:
         print(f"Ваш формат сохранения: {expansion}")
         raise ValueError("Формат сохранения не поддерживается, поддерживается только: csv, xlsx")
@@ -254,7 +272,7 @@ def ETL_function(path_dir_data: str =r"./data/data", num_months: int|None =None,
         kol_user_clusters: int =75, kol_author_clusters: int=45,
         path_save: str =r"data/after_transform_csv/dataset.csv",
         cyclecally_by_month: bool =False,
-        add_negatives: bool =False,
+        add_negatives: bool =True,
         neg_min: int =5,
         neg_max: int =10,
         neg_train_share: float =0.5,
