@@ -28,9 +28,10 @@ data/
 ```
 data/
   after_transform_csv/
-    dataset1.csv ... dataset6.csv
+    dataset1.csv ... dataset5.csv
   candidates/
-    dataset1_candidates.csv ... dataset6_candidates.csv
+    dataset1_candidates.csv ... dataset5_candidates.csv
+    submit_candidates.csv
 submission.csv
 ```
 
@@ -156,7 +157,7 @@ Diversity:
 3. **Появление `Unnamed: 0`** — это индекс, записанный при `to_csv`. Используй `index=False`.
 
 ## Примечания
-- `create_candidates.py` формирует candidates 1–5 с `label`, для 6-го месяца — без label.
+- `create_candidates.py` формирует candidates 1–5 с `label`, а `submit_candidates.csv` строится из `data/submit/candidates.csv`.
 - Валидация строится по следующему месяцу относительно train‑окна.
 - Для ускорения можно уменьшить `iterations`, `depth` или `top_n` в rerank.
 

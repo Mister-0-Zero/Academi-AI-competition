@@ -13,7 +13,7 @@ date_split = [pd.Timestamp("2024-11-14"), pd.Timestamp("2024-12-14"), pd.Timesta
               pd.Timestamp("2025-02-14"), pd.Timestamp("2025-03-14"), None]
 
 def _add_labels(interactions):
-    label_map = {1: 1, 2: 3}
+    label_map = {1: 1, 2: 2}
     interactions = interactions.copy()
     interactions["label"] = (
         interactions["event_type"].replace(label_map).fillna(0).astype("int64")
@@ -29,24 +29,58 @@ def _dedupe_positives(interactions):
             rating=("rating", "max"),
             event_ts=("event_ts", "max"),
             label=("label", "max"),
+            genre_id=("genre_id", "first")
         )
     )
 
 def _sample_negatives(
     positives,
     all_editions: Iterable[int],
-    train_editions: Iterable[int],
+    editions: DataFrame,
+    book_genres: DataFrame,
     neg_min: int,
     neg_max: int,
-    train_share: float,
     random_state: int | None,
+    popular_share: float = 0.3,
+    genre_share: float = 0.2,
 ):
     rng = np.random.default_rng(random_state)
     pool_all = set(all_editions)
-    pool_train = set(train_editions)
-    pool_other = pool_all - pool_train
 
+    def _flatten_genres(series):
+        genres = set()
+        for item in series:
+            if isinstance(item, list):
+                genres.update([g for g in item if pd.notna(g)])
+        return genres
+
+    popular_list = (
+        positives.groupby("edition_id").size().sort_values(ascending=False).index.tolist()
+    )
+    top_count = int(len(popular_list) * popular_share)
+    popular_pool = set(popular_list[:top_count]) if top_count > 0 else set()
+
+    edition_genres = (
+        editions[["edition_id", "book_id"]]
+        .merge(book_genres, on="book_id", how="left")
+        .groupby("edition_id")["genre_id"]
+        .apply(lambda x: set(x.dropna().tolist()))
+        .to_dict()
+    )
+
+    genre_to_editions = {}
+    for eid, genres in edition_genres.items():
+        for g in genres:
+            genre_to_editions.setdefault(g, set()).add(eid)
+
+    user_genres = positives.groupby("user_id")["genre_id"].apply(_flatten_genres).to_dict()
+
+    min_ts = positives["event_ts"].min()
     max_ts = positives["event_ts"].max()
+    if pd.isna(min_ts) or pd.isna(max_ts):
+        min_ts = max_ts = pd.Timestamp.utcnow()
+    min_val = min_ts.value
+    max_val = max_ts.value
     neg_rows = []
 
     positives_by_user = positives.groupby("user_id")["edition_id"].apply(set)
@@ -56,20 +90,39 @@ def _sample_negatives(
             continue
 
         neg_total = int(rng.integers(neg_min, neg_max + 1, size=pos_count).sum())
-        neg_train_target = int(round(neg_total * train_share))
-        neg_other_target = neg_total - neg_train_target
+        pop_target = int(round(neg_total * popular_share))
+        genre_target = int(round(neg_total * genre_share))
+        rand_target = max(0, neg_total - pop_target - genre_target)
 
-        candidates_train = list(pool_train - pos_items)
-        candidates_other = list(pool_other - pos_items)
         neg_items = set()
+        excluded = set(pos_items)
 
-        if candidates_train and neg_train_target > 0:
-            k = min(neg_train_target, len(candidates_train))
-            neg_items.update(rng.choice(candidates_train, size=k, replace=False).tolist())
+        if pop_target > 0 and popular_pool:
+            pop_candidates = list(popular_pool - excluded)
+            k = min(pop_target, len(pop_candidates))
+            if k > 0:
+                neg_items.update(rng.choice(pop_candidates, size=k, replace=False).tolist())
+                excluded.update(neg_items)
 
-        if candidates_other and neg_other_target > 0:
-            k = min(neg_other_target, len(candidates_other))
-            neg_items.update(rng.choice(candidates_other, size=k, replace=False).tolist())
+        if genre_target > 0:
+            user_genre_set = user_genres.get(user_id, set())
+            if user_genre_set:
+                genre_candidates = set()
+                for g in user_genre_set:
+                    genre_candidates.update(genre_to_editions.get(g, set()))
+                if popular_pool:
+                    genre_candidates = genre_candidates & popular_pool
+                genre_candidates = list(genre_candidates - excluded)
+                k = min(genre_target, len(genre_candidates))
+                if k > 0:
+                    neg_items.update(rng.choice(genre_candidates, size=k, replace=False).tolist())
+                    excluded.update(neg_items)
+
+        if rand_target > 0:
+            rand_candidates = list(pool_all - excluded)
+            k = min(rand_target, len(rand_candidates))
+            if k > 0:
+                neg_items.update(rng.choice(rand_candidates, size=k, replace=False).tolist())
 
         if len(neg_items) < neg_total:
             remaining = list(pool_all - pos_items - neg_items)
@@ -78,13 +131,18 @@ def _sample_negatives(
                 neg_items.update(rng.choice(remaining, size=k, replace=False).tolist())
 
         for edition_id in neg_items:
+            if min_val < max_val:
+                ts_val = rng.integers(min_val, max_val + 1)
+                event_ts = pd.to_datetime(ts_val, unit="ns")
+            else:
+                event_ts = max_ts
             neg_rows.append(
                 {
                     "user_id": user_id,
                     "edition_id": edition_id,
                     "event_type": 0,
                     "rating": np.nan,
-                    "event_ts": max_ts,
+                    "event_ts": event_ts,
                     "label": 0,
                 }
             )
@@ -132,9 +190,8 @@ def Extract(
     path_dir_data: str,
     num_months: int | None,
     add_negatives: bool = False,
-    neg_min: int = 5,
-    neg_max: int = 10,
-    neg_train_share: float = 0.5,
+    neg_min: int = 10,
+    neg_max: int = 20,
     random_state: int | None = 42,
 ) -> DataFrame:
 
@@ -149,25 +206,33 @@ def Extract(
     if num_months is not None and date_split[num_months - 1] is not None:
         interactions = interactions[interactions["event_ts"] < date_split[num_months - 1]]
 
+    #Составление позитива с жанрами
     interactions = _add_labels(interactions)
+    genres_mas = (book_genres.groupby("book_id")["genre_id"].apply(list).reset_index())
+    df_ = interactions.merge(editions, on="edition_id", how="left")
+    df_ = df_.merge(users, on="user_id", how="left")
+    df_ = df_.merge(genres_mas, on="book_id", how="left")
+    df_ = df_[["user_id", "edition_id", "event_type", "rating", "event_ts", "genre_id", "label"]]
 
     if add_negatives:
-        positives = pd.DataFrame(_dedupe_positives(interactions))
+        positives = pd.DataFrame(_dedupe_positives(df_))
         negatives = pd.DataFrame(
             _sample_negatives(
                 positives=positives,
                 all_editions=editions["edition_id"],
-                train_editions=interactions["edition_id"],
+                editions=editions,
+                book_genres=book_genres,
                 neg_min=neg_min,
                 neg_max=neg_max,
-                train_share=neg_train_share,
                 random_state=random_state,
             )
         )
         interactions = pd.concat([positives, negatives], ignore_index=True)
 
+    if "genre_id" in interactions.columns:
+        interactions = interactions.drop(columns=["genre_id"])
+
     genres_mas = (book_genres.groupby("book_id")["genre_id"].apply(list).reset_index())
-    genres_mas
 
     df = interactions.merge(editions, on="edition_id", how="left")
     df = df.merge(users, on="user_id", how="left")
@@ -273,15 +338,14 @@ def ETL_function(path_dir_data: str =r"./data/data", num_months: int|None =None,
         path_save: str =r"data/after_transform_csv/dataset.csv",
         cyclecally_by_month: bool =False,
         add_negatives: bool =True,
-        neg_min: int =5,
-        neg_max: int =10,
-        neg_train_share: float =0.5,
+        neg_min: int =10,
+        neg_max: int =20,
         random_state: int | None =42,
         rank_lambda: float =0.5,
         sim_noise_scale: float =0.01):
 
     if cyclecally_by_month:
-        for ind, _ in enumerate(date_split):
+        for ind in range(len(date_split) - 1):
             print(f"Формируем датафрейм длиной логов в {ind + 1} месяц")
             print("Запуск Extract")
             df = Extract(
@@ -290,7 +354,6 @@ def ETL_function(path_dir_data: str =r"./data/data", num_months: int|None =None,
                 add_negatives=add_negatives,
                 neg_min=neg_min,
                 neg_max=neg_max,
-                neg_train_share=neg_train_share,
                 random_state=random_state,
             )
             print("Датафрейм сформировался", "\n")
@@ -317,7 +380,6 @@ def ETL_function(path_dir_data: str =r"./data/data", num_months: int|None =None,
             add_negatives=add_negatives,
             neg_min=neg_min,
             neg_max=neg_max,
-            neg_train_share=neg_train_share,
             random_state=random_state,
         )
         print("Датафрейм сформировался", "\n")

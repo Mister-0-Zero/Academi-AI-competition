@@ -7,7 +7,7 @@ from ETL import Transform, date_split
 
 
 def _add_labels(interactions: DataFrame) -> DataFrame:
-    label_map = {1: 1, 2: 3}
+    label_map = {1: 1, 2: 2}
     interactions = interactions.copy()
     interactions["label"] = interactions["event_type"].replace(label_map).fillna(0).astype("int64")
     return interactions
@@ -104,7 +104,7 @@ def _merge_base(
     df = df.merge(users, on="user_id", how="left")
     df = df.merge(genres_mas, on="book_id", how="left")
     if "label" in df.columns:
-        df["event_type"] = df["label"].map({1: 1, 3: 2}).fillna(0).astype("int64")
+        df["event_type"] = df["label"].map({1: 1, 2: 2}).fillna(0).astype("int64")
     else:
         df["event_type"] = 0
     df["rating"] = np.nan
@@ -201,6 +201,8 @@ def create_candidates(
     rank_lambda: float = 0.5,
     sim_noise_scale: float = 0.01,
     cyclecally_by_month: bool = True,
+    months: list[int] | None = None,
+    build_submit: bool = True,
 ) -> None:
     book_genres = pd.read_csv(path_dir_data + "/book_genres.csv")
     editions = pd.read_csv(path_dir_data + "/editions.csv")
@@ -216,68 +218,78 @@ def create_candidates(
 
     rng = np.random.default_rng(random_state)
 
-    if cyclecally_by_month:
-        for month_index in range(1, 6):
-            print(f"Формируем кандидатов для месяца {month_index}")
-            candidates = _build_candidates_for_month(
-                month_index=month_index,
-                interactions=interactions,
-                editions=editions,
-                pos_limit=pos_limit,
-                total_candidates=total_candidates,
-                neg_train_share=neg_train_share,
-                rng=rng,
-            )
+    if months is None:
+        if cyclecally_by_month:
+            months_to_build = list(range(1, 6))
+        else:
+            months_to_build = []
+    else:
+        months_to_build = sorted(set(months))
 
-            train_end = date_split[month_index - 1]
-            stats_df = _build_stats_df(interactions, editions, users, genres_mas, train_end)
+    for month_index in months_to_build:
+        if month_index < 1 or month_index > 5:
+            raise ValueError("month_index должен быть в диапазоне 1..5")
+        print(f"Формируем кандидатов для месяца {month_index}")
+        candidates = _build_candidates_for_month(
+            month_index=month_index,
+            interactions=interactions,
+            editions=editions,
+            pos_limit=pos_limit,
+            total_candidates=total_candidates,
+            neg_train_share=neg_train_share,
+            rng=rng,
+        )
 
-            event_ts = date_split[month_index] if month_index < len(date_split) else interactions["event_ts"].max()
-            if event_ts is None:
-                event_ts = interactions["event_ts"].max()
-            candidates_base = _merge_base(candidates, editions, users, genres_mas, event_ts)
+        train_end = date_split[month_index - 1]
+        stats_df = _build_stats_df(interactions, editions, users, genres_mas, train_end)
 
-            candidates_features = Transform(
-                candidates_base,
-                kol_in_group_publ_year,
-                kol_in_group_users_year,
-                start_val_authors,
-                start_val_books,
-                kol_user_clusters,
-                kol_author_clusters,
-                random_state=random_state,
-                rank_lambda=rank_lambda,
-                sim_noise_scale=sim_noise_scale,
-                stats_df=stats_df,
-            )
+        event_ts = date_split[month_index] if month_index < len(date_split) else interactions["event_ts"].max()
+        if event_ts is None:
+            event_ts = interactions["event_ts"].max()
+        candidates_base = _merge_base(candidates, editions, users, genres_mas, event_ts)
 
-            path_save = os.path.join(path_save_dir, f"dataset{month_index}_candidates.csv")
-            candidates_features.to_csv(path_save, index=False)
-            print(f"Сохранено: {path_save}")
+        candidates_features = Transform(
+            candidates_base,
+            kol_in_group_publ_year,
+            kol_in_group_users_year,
+            start_val_authors,
+            start_val_books,
+            kol_user_clusters,
+            kol_author_clusters,
+            random_state=random_state,
+            rank_lambda=rank_lambda,
+            sim_noise_scale=sim_noise_scale,
+            stats_df=stats_df,
+        )
 
-    print("Формируем кандидатов для месяца 6")
-    stats_df = _build_stats_df(interactions, editions, users, genres_mas, None)
-    submit_base = submit_candidates.copy()
-    event_ts = interactions["event_ts"].max()
-    submit_base = _merge_base(submit_base, editions, users, genres_mas, event_ts)
+        path_save = os.path.join(path_save_dir, f"dataset{month_index}_candidates.csv")
+        candidates_features.to_csv(path_save, index=False)
+        print(f"Сохранено: {path_save}")
 
-    submit_features = Transform(
-        submit_base,
-        kol_in_group_publ_year,
-        kol_in_group_users_year,
-        start_val_authors,
-        start_val_books,
-        kol_user_clusters,
-        kol_author_clusters,
-        random_state=random_state,
-        rank_lambda=rank_lambda,
-        sim_noise_scale=sim_noise_scale,
-        stats_df=stats_df,
-    )
+    if build_submit:
+        print("Формируем кандидатов для submission из candidates.csv")
+        stats_df = _build_stats_df(interactions, editions, users, genres_mas, date_split[4])
+        submit_base = submit_candidates.copy()
+        event_ts = interactions["event_ts"].max()
+        submit_base = _merge_base(submit_base, editions, users, genres_mas, event_ts)
 
-    path_save = os.path.join(path_save_dir, "dataset6_candidates.csv")
-    submit_features.to_csv(path_save, index=False)
-    print(f"Сохранено: {path_save}")
+        submit_features = Transform(
+            submit_base,
+            kol_in_group_publ_year,
+            kol_in_group_users_year,
+            start_val_authors,
+            start_val_books,
+            kol_user_clusters,
+            kol_author_clusters,
+            random_state=random_state,
+            rank_lambda=rank_lambda,
+            sim_noise_scale=sim_noise_scale,
+            stats_df=stats_df,
+        )
+
+        path_save = os.path.join(path_save_dir, "submit_candidates.csv")
+        submit_features.to_csv(path_save, index=False)
+        print(f"Сохранено: {path_save}")
 
 
 if __name__ == "__main__":
